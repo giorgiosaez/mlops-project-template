@@ -1,0 +1,140 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+experiment_name: ''
+# description: Training Pipeline to train a model that predicts taxi fare price, using Feathr as feature store
+
+# <inputs_and_outputs>
+inputs:
+  input:
+    type: uri_file
+    path: azureml:feathr-data@latest
+  enable_monitoring: $enable_monitoring
+  key_vault_name: ''
+  synapse_workspace_name: ''
+  adls_account: ''
+  adls_fs_name: ''
+  redis_name: ''
+  webapp_name: ''
+  table_name: 'taximonitoring'
+  # sp_client_id: ''
+  # sp_client_secret: ''
+  # tenant_id: ''
+outputs:
+  train_data:
+  trained_model:
+  model_info_output_path:
+# </inputs_and_outputs>
+
+# <jobs>
+settings:
+  default_datastore: azureml:workspaceblobstore
+  default_compute: azureml:cpu-cluster
+  continue_on_step_failure: false
+
+jobs:
+  create_feathr_config:
+    name: create_feathr_config
+    display_name: create-feathr-config
+    code: ../../../data-science/src
+    command: >-
+      python create_feathr_config.py
+      --key_vault_name ${{inputs.key_vault_name}}
+      --synapse_workspace_name ${{inputs.synapse_workspace_name}}
+      --adls_account ${{inputs.adls_account}}
+      --adls_fs_name ${{inputs.adls_fs_name}}
+      --redis_name ${{inputs.redis_name}}
+      --webapp_name ${{inputs.webapp_name}}
+      --project_name 'feathr_demo'
+      --spark_cluster 'azure_synapse'
+      --feathr_config_path 'feathr_config.yaml'
+    inputs:
+      key_vault_name: ${{parent.inputs.key_vault_name}}
+      synapse_workspace_name: ${{parent.inputs.synapse_workspace_name}}
+      adls_account: ${{parent.inputs.adls_account}}
+      adls_fs_name: ${{parent.inputs.adls_fs_name}}
+      redis_name: ${{parent.inputs.redis_name}}
+      webapp_name: ${{parent.inputs.webapp_name}}
+    environment: azureml:feathr-demo-env@latest
+
+  prep_data:
+    name: prep_data
+    display_name: prep-data
+    code: ../../../data-science/src
+    command: >-
+      pip install -r requirements/feathr-requirements.txt --use-deprecated=legacy-resolver &&
+      python prep.py
+      --key_vault_name ${{inputs.key_vault_name}}
+      --synapse_workspace_name ${{inputs.synapse_workspace_name}}
+      --adls_account ${{inputs.adls_account}}
+      --adls_fs_name ${{inputs.adls_fs_name}}
+      --webapp_name ${{inputs.webapp_name}}
+      --raw_data ${{inputs.raw_data}}
+      --train_data ${{outputs.train_data}}
+      # --sp_client_id ${{inputs.sp_client_id}}
+      # --sp_client_secret ${{inputs.sp_client_secret}}
+      # --tenant_id ${{inputs.tenant_id}}
+    environment: azureml:feathr-demo-env@latest
+    inputs:
+      key_vault_name: ${{parent.inputs.key_vault_name}}
+      synapse_workspace_name: ${{parent.inputs.synapse_workspace_name}}
+      adls_account: ${{parent.inputs.adls_account}}
+      adls_fs_name: ${{parent.inputs.adls_fs_name}}
+      webapp_name: ${{parent.inputs.webapp_name}}
+      raw_data: ${{parent.inputs.input}}
+      # sp_client_id: ${{parent.inputs.sp_client_id}}
+      # sp_client_secret: ${{parent.inputs.sp_client_secret}}
+      # tenant_id: ${{parent.inputs.tenant_id}}
+    outputs:
+      train_data: ${{parent.outputs.train_data}}
+
+  train_model:
+    name: train_model
+    display_name: train-model
+    code: ../../../data-science/src
+    command: >-
+      pip install -r requirements/train-requirements.txt --use-deprecated=legacy-resolver &&
+      python train.py
+      --config_path 'aml_config.json'
+      --data_path ${{inputs.data}}
+      --model_output ${{outputs.model_output}}
+    environment: azureml:feathr-demo-env@latest
+    inputs:
+      data: ${{parent.jobs.prep_data.outputs.train_data}}
+    outputs:
+      model_output: ${{parent.outputs.trained_model}}
+
+
+  # evaluate_model:
+  #   name: evaluate_model
+  #   display_name: evaluate-model
+  #   code: ../../../data-science/src
+  #   command: >-
+  #     python evaluate.py
+  #     --model_name ${{inputs.model_name}}
+  #     --model_input ${{inputs.model_input}}
+  #     --test_data ${{inputs.test_data}}
+  #     --evaluation_output ${{outputs.evaluation_output}}
+  #   environment: azureml:taxi-train-env@latest
+  #   inputs:
+  #     model_name: "taxi-model"
+  #     model_input: ${{parent.jobs.train_model.outputs.model_output}}
+  #     test_data: ${{parent.jobs.prep_data.outputs.test_data}}
+  #   outputs:
+  #     evaluation_output: ${{parent.outputs.evaluation_output}}
+
+  register_model:
+    name: register_model
+    display_name: register-model
+    code: ../../../data-science/src
+    command: >-
+      python register.py
+      --model_name ${{inputs.model_name}}
+      --model_path ${{inputs.model_path}}
+      --model_info_output_path ${{outputs.model_info_output_path}}
+    environment: azureml:feathr-demo-env@latest
+    inputs:
+      model_name: "taxi-model"
+      model_path: ${{parent.jobs.train_model.outputs.model_output}}
+    outputs:
+      model_info_output_path: ${{parent.outputs.model_info_output_path}}
+# </jobs>
